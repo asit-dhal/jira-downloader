@@ -1,0 +1,13 @@
+{
+    "title": "Jira Downloader",
+    "tags": [
+        { "tag": "jira1",
+          "username": "",
+          "password": "",
+          "endpoint": "https://jira.apache.org/jira/",
+          "download_path": "/tmp" },
+        { "tag": "jira2",
+          "username": "asit-dhal",
+          "password": "",
+          "endpoint": "",
+          "download_path": "/tmp" } ] }

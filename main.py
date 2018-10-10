@@ -2,9 +2,9 @@
 # Copyright(c) 2018 Asit Dhal.
 # Distributed under the MIT License (http://opensource.org/licenses/MIT)
 #
-import toml
+
+import json
 from jira import JIRA
-from config import *
 import sys, re, os
 import os.path
 import argparse
@@ -31,56 +31,89 @@ def str2bool(v):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
-
-options = {'server': ENDPOINT}
-jira = JIRA(options, basic_auth=(USERNAME, PASSWORD))
-
 def load_config():
-    config = dict()
-    parsed_toml = toml.load("config.toml")
-    for tag, _ in parsed_toml.items():
-        if isinstance(parsed_toml[tag], dict):
-            config[tag] = dict()
-            if parsed_toml[tag].get("username", None):
-                config[tag]["username"] = parsed_toml[tag]["username"]
-            if parsed_toml[tag].get("password", None):
-                config[tag]["password"] = parsed_toml[tag]["password"]
-            if parsed_toml[tag].get("endpoint", None):
-                config[tag]["endpoint"] = parsed_toml[tag]["endpoint"]
-            config[tag]["download_path"] = parsed_toml[tag].get("download_path", "")
+    config = list()
+    config_content = ""
+    with open('config.json', 'r') as content_file:
+        config_content = content_file.read()
+
+    parsed_config = json.loads(config_content)
+    tags = parsed_config.get("tags", None)
+    if not tags:
+        logging.error("config.json has no tags section")
+        return
+    for tag in tags:
+        if not isinstance(tag, dict):
+            logging.error("tag should have a tag, username, password, endpoint and download_path")
+            continue
+        else:
+            ret = False
+            if not tag.get("username", None):
+                logging.error("jira_link should have a username")
+                ret = True
+            if not tag.get("password", None):
+                logging.error("jira_link should have a password")
+                ret = True
+            if not tag.get("endpoint", None):
+                logging.error("jira_link should have an endpoint")
+                ret = True
+            if not tag.get("download_path", None):
+                logging.error("jira_link should have download_path")
+                ret = True
+            if not tag.get("tag", None):
+                logging.error("jira_link should have a tag")
+                ret = True
+            if ret:
+                continue
+            
+            item = dict()
+            item["username"] = tag["username"]
+            item["password"] = tag["password"]
+            item["endpoint"] = tag["endpoint"]
+            item["download_path"] =tag["download_path"]
+            item["name"] = tag["tag"]
+            config.append(item)
 
     return config
 
+class JiraRequester:
+    def __init__(self, username, password, endpoint, download_path):
+        self.username = username
+        self.password = password
+        self.endpoint = endpoint
+        self.download_path = download_path
+
+        options = {'server': self.endpoint}
+        self.jira_instance = JIRA(options, basic_auth=(self.username, self.password))
 
 
-def fetch_jira_issue(issue_id, override_flag=True):
-    issue = jira.issue(issue_id)
-    summary = issue.fields.summary
-    logging.info("Fetching %s : %s", issue_id, summary)
-    issue_title = slugify(summary)
-    download_dir_name = issue_id + '_' + issue_title
+    def fetch_jira_issue(self, issue_id, override_flag=True):
+        issue = self.jira_instance.issue(issue_id)
+        summary = issue.fields.summary
+        logging.info("Fetching %s : %s", issue_id, summary)
+        issue_title = slugify(summary)
+        download_dir_name = issue_id + '_' + issue_title
 
-    download_path = os.path.join(DOWNLOAD_PATH, download_dir_name)
+        download_path = os.path.join(self.download_path, download_dir_name)
 
-    if len(issue.fields.attachment) == 0:
-        logging.info("%s has no attachments", issue_id)
-    else:
-        try:
-            os.makedirs(download_path)
+        if len(issue.fields.attachment) == 0:
+            logging.info("%s has no attachments", issue_id)
+        else:
+            try:
+                os.makedirs(download_path)
+            except FileExistsError:
+                if override_flag:
+                    logging.warning("Issue already exists or the path is not empty")
+                else:
+                    logging.error("Please empty the path or run with -f option")
+                    return
 
-        except FileExistsError:
-            if override_flag:
-                logging.warning("Issue already exists or the path is not empty")
-            else:
-                logging.error("Please empty the path or run with -f option")
-                return
-
-        for attachment in issue.fields.attachment:
-            logging.info("Downloading %s of size: %s", attachment.filename, sizeof_fmt(attachment.size))
-            issue_path = os.path.join(download_path, attachment.filename)
-            f = open(issue_path, 'wb')
-            f.write(attachment.get())
-            f.close()
+            for attachment in issue.fields.attachment:
+                logging.info("Downloading %s of size: %s", attachment.filename, sizeof_fmt(attachment.size))
+                issue_path = os.path.join(download_path, attachment.filename)
+                f = open(issue_path, 'wb')
+                f.write(attachment.get())
+                f.close()
 
 
 def clean():
@@ -89,10 +122,7 @@ def clean():
 def postprocessing():
     pass
 
-
-def main():
-    config = load_config()
-
+def parse_argument(choices):
     parser = argparse.ArgumentParser(description='Jira attachment downloader')
     parser.add_argument("-d", "--debug", dest="debug_flag", default=False,
                         action="store_true", help="write report to FILE")
@@ -101,22 +131,32 @@ def main():
                         action="store_true", help="Override dirs/files")
     parser.add_argument("-c", "--clean", dest="clean_flag", default=False,
                         action="store_true", help="Delete closed Issues")
-    if len(config) > 1:
-        parser.add_argument("-t", "--tag", dest="tag",
-                          default=list(config.keys())[0], help="JIRA Tags")
+    
+    parser.add_argument("-t", "--tag", dest="tag", choices=choices,
+                          default=choices[0], help="JIRA Tags")
 
-    parsed_args = parser.parse_args()
+    return parser.parse_args()
 
+
+def main():
+    config = load_config()
+    parsed_args = parse_argument(choices=tuple([item["name"] for  item in config]))
+    
     if parsed_args.debug_flag:
         logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
     else:
         logging.basicConfig(format='%(message)s', level=logging.INFO)
 
+    logging.debug("args: %s", str(parsed_args))
+    logging.debug("config: %s", json.dumps(config, indent=2, sort_keys=True))
+
     if not parsed_args.issue_id and not parsed_args.clean_flag:
         logging.warn("Either specify an issue id or clean flag")
 
+    selected_index = [i for i,x in enumerate(config) if x["name"] == parsed_args.tag][0]
+    jira_requester = JiraRequester(config[selected_index]["username"], config[selected_index]["password"], config[selected_index]["endpoint"], config[selected_index]["download_path"])
     if parsed_args.issue_id:
-        fetch_jira_issue(parsed_args.issue_id, parsed_args.force_flag)
+        jira_requester.fetch_jira_issue(parsed_args.issue_id, parsed_args.force_flag)
     elif parsed_args.clean_flag:
         clean()
 
