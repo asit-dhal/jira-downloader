@@ -9,6 +9,9 @@ import sys, re, os
 import os.path
 import argparse
 import logging
+import subprocess
+
+unpack_path = None
 
 def slugify(value):
     value = str(re.sub('[^\w\s-]', '', value).strip().lower())
@@ -32,6 +35,7 @@ def str2bool(v):
 
 
 def load_config():
+    global unpack_path
     config = list()
     config_content = ""
     with open('config.json', 'r') as content_file:
@@ -39,6 +43,8 @@ def load_config():
 
     parsed_config = json.loads(config_content)
     tags = parsed_config.get("tags", None)
+    unpack_path = parsed_config.get("7z-path", None)
+
     if not tags:
         logging.error("config.json has no tags section")
         return
@@ -88,6 +94,7 @@ class JiraRequester:
 
 
     def fetch_jira_issue(self, issue_id, override_flag=True):
+        downloaded_files = list()
         issue = self.jira_instance.issue(issue_id)
         summary = issue.fields.summary
         logging.info("Fetching %s : %s", issue_id, summary)
@@ -114,13 +121,21 @@ class JiraRequester:
                 f = open(issue_path, 'wb')
                 f.write(attachment.get())
                 f.close()
+                downloaded_files.append(issue_path)
+        
+        return downloaded_files
 
 
 def clean():
     pass
 
-def postprocessing():
-    pass
+def postprocess(file_list, unpack_tool):
+    for f in file_list:
+        _, ext = os.path.splitext(f)
+        ext = ext[1:]
+        if ext.lower() in ["7z", "zip"]:
+            logging.info("Unpacking: %s", f)
+            subprocess.call(unpack_tool, f)
 
 def parse_argument(choices):
     parser = argparse.ArgumentParser(description='Jira attachment downloader')
@@ -156,7 +171,8 @@ def main():
     selected_index = [i for i,x in enumerate(config) if x["name"] == parsed_args.tag][0]
     jira_requester = JiraRequester(config[selected_index]["username"], config[selected_index]["password"], config[selected_index]["endpoint"], config[selected_index]["download_path"])
     if parsed_args.issue_id:
-        jira_requester.fetch_jira_issue(parsed_args.issue_id, parsed_args.force_flag)
+        file_list = jira_requester.fetch_jira_issue(parsed_args.issue_id, parsed_args.force_flag)
+        postprocess(file_list, unpack_path)
     elif parsed_args.clean_flag:
         clean()
 
