@@ -4,7 +4,7 @@
 #
 
 import json
-from jira import JIRA
+from jira import JIRA, JIRAError
 import sys, re, os
 import os.path
 import argparse
@@ -90,40 +90,47 @@ class JiraRequester:
         self.download_path = download_path
 
         options = {'server': self.endpoint}
-        self.jira_instance = JIRA(options, basic_auth=(self.username, self.password))
-
+        try:
+            self.jira_instance = JIRA(options, basic_auth=(self.username, self.password), max_retries=1)
+        except Exception as e:
+            logging.critical("%s", e)
+            sys.exit()
 
     def fetch_jira_issue(self, issue_id, override_flag=True):
         downloaded_files = list()
-        issue = self.jira_instance.issue(issue_id)
-        summary = issue.fields.summary
-        logging.info("Fetching %s : %s", issue_id, summary)
-        issue_title = slugify(summary)
-        download_dir_name = issue_id + '_' + issue_title
+        try:
+            issue = self.jira_instance.issue(issue_id)
+            summary = issue.fields.summary
+            logging.info("Fetching %s : %s", issue_id, summary)
+            issue_title = slugify(summary)
+            download_dir_name = issue_id + '_' + issue_title
 
-        download_path = os.path.join(self.download_path, download_dir_name)
+            download_path = os.path.join(self.download_path, download_dir_name)
 
-        if len(issue.fields.attachment) == 0:
-            logging.info("%s has no attachments", issue_id)
-        else:
-            try:
-                os.makedirs(download_path)
-            except FileExistsError:
-                if override_flag:
-                    logging.warning("Issue already exists or the path is not empty")
-                else:
-                    logging.error("Please empty the path or run with -f option")
-                    return
+            if len(issue.fields.attachment) == 0:
+                logging.info("%s has no attachments", issue_id)
+            else:
+                try:
+                    os.makedirs(download_path)
+                except FileExistsError:
+                    if override_flag:
+                        logging.warning("Issue already exists or the path is not empty")
+                    else:
+                        logging.error("Please empty the path or run with -f option")
+                        return
 
-            for attachment in issue.fields.attachment:
-                logging.info("Downloading %s of size: %s", attachment.filename, sizeof_fmt(attachment.size))
-                issue_path = os.path.join(download_path, attachment.filename)
-                f = open(issue_path, 'wb')
-                f.write(attachment.get())
-                f.close()
-                downloaded_files.append(issue_path)
-        
+                for attachment in issue.fields.attachment:
+                    logging.info("Downloading %s of size: %s", attachment.filename, sizeof_fmt(attachment.size))
+                    issue_path = os.path.join(download_path, attachment.filename)
+                    f = open(issue_path, 'wb')
+                    f.write(attachment.get())
+                    f.close()
+                    downloaded_files.append(issue_path)
+        except JIRAError as e:
+            logging.critical("%d: Error: %s", e.status_code, e.text)
+
         return downloaded_files
+        
 
 
 def clean():
